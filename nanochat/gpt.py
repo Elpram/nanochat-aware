@@ -22,6 +22,7 @@ import torch.nn.functional as F
 from nanochat.common import get_dist_info, print0
 from nanochat.muon import Muon, DistMuon
 from nanochat.adamw import DistAdamW
+from nanochat.conscious import ConsciousConfig
 
 @dataclass
 class GPTConfig:
@@ -31,6 +32,17 @@ class GPTConfig:
     n_head: int = 6 # number of query heads
     n_kv_head: int = 6 # number of key/value heads (MQA)
     n_embd: int = 768
+    reentry_steps: int = 0
+    ignite_topk: int = 0
+    gate_mode: str = "none"
+
+    def __post_init__(self):
+        # Reuse ConsciousConfig for validation logic.
+        ConsciousConfig(
+            reentry_steps=self.reentry_steps,
+            ignite_topk=self.ignite_topk,
+            gate_mode=self.gate_mode,
+        )
 
 
 def norm(x):
@@ -139,6 +151,7 @@ class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        self.conscious_config = ConsciousConfig.from_model_config(config)
         self.transformer = nn.ModuleDict({
             "wte": nn.Embedding(config.vocab_size, config.n_embd),
             "h": nn.ModuleList([Block(config, layer_idx) for layer_idx in range(config.n_layer)]),

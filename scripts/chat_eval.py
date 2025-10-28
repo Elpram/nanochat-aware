@@ -18,6 +18,7 @@ import torch.distributed as dist
 from nanochat.common import compute_init, compute_cleanup, get_dist_info, print0, autodetect_device_type
 from nanochat.checkpoint_manager import load_model
 from nanochat.engine import Engine
+from nanochat.conscious import ConsciousConfig
 
 from tasks.humaneval import HumanEval
 from tasks.mmlu import MMLU
@@ -195,6 +196,9 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--step', type=int, default=None, help='Step to load')
     parser.add_argument('-x', '--max-problems', type=int, default=None, help='Max problems to evaluate')
     parser.add_argument('--device-type', type=str, default='', choices=['cuda', 'cpu', 'mps'], help='Device type for evaluation: cuda|cpu|mps. empty => autodetect')
+    parser.add_argument('--reentry_steps', type=int, default=None, help='Inner reentry refinement steps per token (0 disables)')
+    parser.add_argument('--ignite_topk', type=int, default=None, help='Top-k tokens to ignite during inner loop (0 disables)')
+    parser.add_argument('--gate_mode', type=str, default=None, choices=ConsciousConfig.VALID_GATE_MODES, help='Coupling gate mode: none|token|head')
     args = parser.parse_args()
 
     device_type = autodetect_device_type() if args.device_type == "" else args.device_type
@@ -204,6 +208,11 @@ if __name__ == "__main__":
 
     model, tokenizer, meta = load_model(args.source, device, phase="eval", model_tag=args.model_tag, step=args.step)
     engine = Engine(model, tokenizer)
+    engine.configure_consciousness(
+        reentry_steps=args.reentry_steps,
+        ignite_topk=args.ignite_topk,
+        gate_mode=args.gate_mode,
+    )
 
     # Get the tasks to evaluate on
     all_tasks = ['ARC-Easy', 'ARC-Challenge', 'MMLU', 'GSM8K', 'HumanEval', 'SpellingBee']
