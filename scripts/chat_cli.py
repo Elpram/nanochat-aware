@@ -9,6 +9,7 @@ import torch
 from nanochat.common import compute_init, autodetect_device_type
 from contextlib import nullcontext
 from nanochat.engine import Engine
+from nanochat.conscious import ConsciousConfig
 from nanochat.checkpoint_manager import load_model
 
 parser = argparse.ArgumentParser(description='Chat with the model')
@@ -20,6 +21,9 @@ parser.add_argument('-t', '--temperature', type=float, default=0.6, help='Temper
 parser.add_argument('-k', '--top-k', type=int, default=50, help='Top-k sampling parameter')
 parser.add_argument('--device-type', type=str, default='', choices=['cuda', 'cpu', 'mps'], help='Device type for evaluation: cuda|cpu|mps. empty => autodetect')
 parser.add_argument('-d', '--dtype', type=str, default='bfloat16', choices=['float32', 'bfloat16'])
+parser.add_argument('--reentry_steps', type=int, default=None, help='Inner reentry refinement steps per token (0 disables)')
+parser.add_argument('--ignite_topk', type=int, default=None, help='Top-k tokens to ignite during inner loop (0 disables)')
+parser.add_argument('--gate_mode', type=str, default=None, choices=ConsciousConfig.VALID_GATE_MODES, help='Coupling gate mode: none|token|head')
 args = parser.parse_args()
 
 # Init the model and tokenizer
@@ -37,6 +41,11 @@ assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>")
 
 # Create Engine for efficient generation
 engine = Engine(model, tokenizer)
+engine.configure_consciousness(
+    reentry_steps=args.reentry_steps,
+    ignite_topk=args.ignite_topk,
+    gate_mode=args.gate_mode,
+)
 
 print("\nNanoChat Interactive Mode")
 print("-" * 50)

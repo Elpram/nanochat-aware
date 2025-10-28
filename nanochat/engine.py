@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from collections import deque
 from nanochat.common import compute_init
 from nanochat.checkpoint_manager import load_model
+from nanochat.conscious import ConsciousConfig
 
 # -----------------------------------------------------------------------------
 # Calculator tool helpers
@@ -182,17 +183,82 @@ class RowState:
 
 class Engine:
 
-    def __init__(self, model, tokenizer):
+    def __init__(self, model, tokenizer, conscious_config=None):
         self.model = model
         self.tokenizer = tokenizer # needed for tool use
+        base_config = ConsciousConfig.from_model(model)
+        if conscious_config is None:
+            conscious_config = base_config
+        elif isinstance(conscious_config, dict):
+            conscious_config = base_config.with_overrides(**conscious_config)
+        elif not isinstance(conscious_config, ConsciousConfig):
+            raise TypeError(
+                "conscious_config must be a ConsciousConfig or dict of overrides"
+            )
+        self.conscious_config = conscious_config
+        self._last_active_conscious_config = conscious_config
+        # Keep the model attribute in sync so downstream components can read it.
+        if hasattr(self.model, "conscious_config"):
+            self.model.conscious_config = conscious_config
+
+    def configure_consciousness(self, conscious_config=None, **overrides):
+        base = self.conscious_config
+        if conscious_config is not None:
+            if isinstance(conscious_config, dict):
+                base = base.with_overrides(**conscious_config)
+            elif isinstance(conscious_config, ConsciousConfig):
+                base = conscious_config
+            else:
+                raise TypeError(
+                    "conscious_config must be a ConsciousConfig or dict of overrides"
+                )
+        if overrides:
+            base = base.with_overrides(**overrides)
+        self.conscious_config = base
+        if hasattr(self.model, "conscious_config"):
+            self.model.conscious_config = base
+        return self.conscious_config
 
     @torch.inference_mode()
-    def generate(self, tokens, num_samples=1, max_tokens=None, temperature=1.0, top_k=None, seed=42):
+    def generate(
+        self,
+        tokens,
+        num_samples=1,
+        max_tokens=None,
+        temperature=1.0,
+        top_k=None,
+        seed=42,
+        conscious_config=None,
+        reentry_steps=None,
+        ignite_topk=None,
+        gate_mode=None,
+    ):
         """Same as generate, but does single prefill and then clones the KV cache."""
         assert isinstance(tokens, list) and isinstance(tokens[0], int), "expecting list of ints"
         device = self.model.get_device()
         rng = torch.Generator(device=device)
         rng.manual_seed(seed)
+
+        active_config = self.conscious_config
+        if conscious_config is not None:
+            if isinstance(conscious_config, dict):
+                active_config = active_config.with_overrides(**conscious_config)
+            elif isinstance(conscious_config, ConsciousConfig):
+                active_config = conscious_config
+            else:
+                raise TypeError(
+                    "conscious_config must be a ConsciousConfig or dict of overrides"
+                )
+        if any(value is not None for value in (reentry_steps, ignite_topk, gate_mode)):
+            active_config = active_config.with_overrides(
+                reentry_steps=reentry_steps,
+                ignite_topk=ignite_topk,
+                gate_mode=gate_mode,
+            )
+        self._last_active_conscious_config = active_config
+        if hasattr(self.model, "conscious_config"):
+            self.model.conscious_config = active_config
+        # TODO: integrate active_config into the generation loop in future PRs.
 
         # Get the special tokens we need to coordinate the tool use state machine
         get_special = lambda s: self.tokenizer.encode_special(s)

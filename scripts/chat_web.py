@@ -48,6 +48,7 @@ from contextlib import nullcontext
 from nanochat.common import compute_init, autodetect_device_type
 from nanochat.checkpoint_manager import load_model
 from nanochat.engine import Engine
+from nanochat.conscious import ConsciousConfig
 
 # Abuse prevention limits
 MAX_MESSAGES_PER_REQUEST = 500
@@ -71,6 +72,9 @@ parser.add_argument('-s', '--step', type=int, default=None, help='Step to load')
 parser.add_argument('-p', '--port', type=int, default=8000, help='Port to run the server on')
 parser.add_argument('-d', '--dtype', type=str, default='bfloat16', choices=['float32', 'bfloat16'])
 parser.add_argument('--device-type', type=str, default='', choices=['cuda', 'cpu', 'mps'], help='Device type for evaluation: cuda|cpu|mps. empty => autodetect')
+parser.add_argument('--reentry_steps', type=int, default=None, help='Inner reentry refinement steps per token (0 disables)')
+parser.add_argument('--ignite_topk', type=int, default=None, help='Top-k tokens to ignite during inner loop (0 disables)')
+parser.add_argument('--gate_mode', type=str, default=None, choices=ConsciousConfig.VALID_GATE_MODES, help='Coupling gate mode: none|token|head')
 parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind the server to')
 args = parser.parse_args()
 
@@ -94,6 +98,7 @@ class Worker:
     engine: Engine
     tokenizer: object
     autocast_ctx: torch.amp.autocast
+    conscious_config: ConsciousConfig
 
 class WorkerPool:
     """Pool of workers, each with a model replica on a different GPU."""
@@ -125,6 +130,11 @@ class WorkerPool:
 
             model, tokenizer, _ = load_model(source, device, phase="eval", model_tag=model_tag, step=step)
             engine = Engine(model, tokenizer)
+            engine.configure_consciousness(
+                reentry_steps=args.reentry_steps,
+                ignite_topk=args.ignite_topk,
+                gate_mode=args.gate_mode,
+            )
             autocast_ctx = torch.amp.autocast(device_type=device_type, dtype=ptdtype) if device_type == "cuda" else nullcontext()
 
             worker = Worker(
@@ -132,7 +142,8 @@ class WorkerPool:
                 device=device,
                 engine=engine,
                 tokenizer=tokenizer,
-                autocast_ctx=autocast_ctx
+                autocast_ctx=autocast_ctx,
+                conscious_config=engine.conscious_config,
             )
             self.workers.append(worker)
             await self.available_workers.put(worker)
